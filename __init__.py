@@ -84,7 +84,7 @@ def rocm_fttn(
         )
         del q_in, k_in, v_in
 
-    if dim_head <= 64 and HIP_VER == 62:
+    if dim_head <= 128 and HIP_VER == 62:
         q, k, v = map(lambda t: t.transpose(1, 2), (q, k, v))
         ret = ck_fttn_pyb.fwd(
             q, k, v, None, 0, q.shape[-1] ** -0.5, False, False, None
