@@ -66,33 +66,36 @@ select_attention_algorithm = None
 select_attention_vae_algorithm = None
 
 
-def rocm_fttn(
-    q_in, k_in, v_in, heads, mask=None, attn_precision=None, skip_reshape=False
-):  # (q, k, v, causal=False, sm_scale=None):
+def rocm_fttn(q, k, v, heads, mask=None, attn_precision=None, skip_reshape=False, skip_output_reshape=False):
 
     if skip_reshape:
-        b, _, _, dim_head = q_in.shape
-        q = q_in
-        k = k_in
-        v = v_in
+        b, _, _, dim_head = q.shape
     else:
-        b, _, dim_head = q_in.shape
+        b, _, dim_head = q.shape
         dim_head //= heads
         q, k, v = map(
             lambda t: t.view(b, -1, heads, dim_head).transpose(1, 2),
-            (q_in, k_in, v_in),
+            (q, k, v),
         )
-        del q_in, k_in, v_in
+
+    if mask is not None:
+        # add a batch dimension if there isn't already one
+        if mask.ndim == 2:
+            mask = mask.unsqueeze(0)
+        # add a heads dimension if there isn't already one
+        if mask.ndim == 3:
+            mask = mask.unsqueeze(1)
 
     if dim_head <= 128 and HIP_VER == 62:
         q, k, v = map(lambda t: t.transpose(1, 2), (q, k, v))
-        ret = ck_fttn_pyb.fwd(
+        out = ck_fttn_pyb.fwd(
             q, k, v, None, 0, q.shape[-1] ** -0.5, False, False, None
         )[0]
-        return ret.reshape(b, -1, heads * dim_head)
+        if not skip_output_reshape:
+            out = out.reshape(b, -1, heads * dim_head)
+        return out
 
     # print(q.shape, k.shape, v.shape) # [1, 24, 6400, 128] flux
-
     dtype = q.dtype
     q, k, v = map(
         lambda t: t.to(torch.float16),
@@ -105,35 +108,20 @@ def rocm_fttn(
         Br = 32
         Bc = 128
 
-    ret = flash_attn_wmma.forward(q, k, v, Br, Bc, False, dim_head**-0.5, False)[0]
-    # o = rearrange(o, "b h n d -> b n (h d)", h=heads)
-    ret = ret.transpose(1, 2).reshape(b, -1, heads * dim_head)
-
-    return ret.to(dtype)
-
+    out = flash_attn_wmma.forward(q, k, v, Br, Bc, False, dim_head**-0.5, False)[0]
+    if not skip_output_reshape:
+        out = out.transpose(1, 2).reshape(b, -1, heads * dim_head)
+    return out.to(dtype)
 
 def rocm_fttn_vae(q, k, v, *args, **kwargs):
 
     B, C, H, W = q.shape
-
     q, k, v = map(
         lambda t: t.view(B, 1, C, -1).transpose(2, 3),
         (q, k, v),
     )
 
     d_q = q.shape[-1]
-
-    dtype = q.dtype
-    print("dtype",dtype)
-    if dtype != torch.float16:
-        q = q.clip(-40000.0, 40000.0)
-        k = k.clip(-40000.0, 40000.0)
-        v = v.clip(-40000.0, 40000.0)
-
-        q = q.to(torch.float16)
-        k = k.to(torch.float16)
-        v = v.to(torch.float16)
-    # print("VAE",q.shape, k.shape, v.shape)
 
     Br = 64
     Bc = 256
@@ -142,10 +130,7 @@ def rocm_fttn_vae(q, k, v, *args, **kwargs):
         Bc = 128
 
     o = flash_attn_wmma.forward(q, k, v, Br, Bc, False, d_q**-0.5, False)[0]
-
-    o = o.transpose(2, 3).reshape(B, C, H, W)
-    return o.to(dtype)
-
+    return o.transpose(2, 3).reshape(B, C, H, W)
 
 class AttnBlock_hijack(nn.Module):
     def __init__(self, in_channels, conv_op=ops.Conv2d):
