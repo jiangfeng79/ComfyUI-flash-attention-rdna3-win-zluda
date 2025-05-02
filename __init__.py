@@ -86,7 +86,7 @@ def rocm_fttn(q, k, v, heads, mask=None, attn_precision=None, skip_reshape=False
         if mask.ndim == 3:
             mask = mask.unsqueeze(1)
 
-    if dim_head <= 128 and HIP_VER == 62:
+    if dim_head <= 256 and HIP_VER == 62:
         q, k, v = map(lambda t: t.transpose(1, 2), (q, k, v))
         out = ck_fttn_pyb.fwd(
             q, k, v, None, 0, q.shape[-1] ** -0.5, False, False, None
@@ -122,6 +122,7 @@ def rocm_fttn_vae(q, k, v, *args, **kwargs):
     )
 
     d_q = q.shape[-1]
+    #print("vae, head dim:", d_q)
 
     Br = 64
     Bc = 256
@@ -131,6 +132,11 @@ def rocm_fttn_vae(q, k, v, *args, **kwargs):
 
     o = flash_attn_wmma.forward(q, k, v, Br, Bc, False, d_q**-0.5, False)[0]
     return o.transpose(2, 3).reshape(B, C, H, W)
+    #out = ck_fttn_pyb.fwd(
+    #        q, k, v, None, 0, q.shape[-1] ** -0.5, False, False, None
+    #    )[0]
+
+    #return out.transpose(2, 3).reshape(B, C, H, W)
 
 class AttnBlock_hijack(nn.Module):
     def __init__(self, in_channels, conv_op=ops.Conv2d):
