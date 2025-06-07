@@ -9,13 +9,6 @@ import torch
 
 import comfy.ldm.flux.layers
 
-
-torch.backends.cuda.enable_flash_sdp(False)
-torch.backends.cuda.enable_mem_efficient_sdp(False)
-torch.backends.cuda.enable_math_sdp(True)
-
-torch.backends.cudnn.enabled = False
-
 import comfy.ldm.flux
 import comfy.ldm.modules.attention
 import comfy.ldm.modules.diffusionmodules.model
@@ -334,6 +327,7 @@ class AttnOptSelector:
                 "sampling_attention": (available_attns,),
                 "vae_attention": (available_attns,),
                 "Model": ("MODEL",),
+                "enable_cudnn": ("BOOLEAN", {"default": True}), # Our boolean option
             },
         }
 
@@ -344,7 +338,7 @@ class AttnOptSelector:
 
     CATEGORY = "_for_testing"
 
-    def test(self, sampling_attention, vae_attention, Model):
+    def test(self, sampling_attention, vae_attention, Model, enable_cudnn):
         global select_attention_algorithm, select_attention_vae_algorithm
         print("  Select optimized attention:", sampling_attention, vae_attention)
         if sampling_attention == "xformers":
@@ -357,6 +351,14 @@ class AttnOptSelector:
             select_attention_algorithm = attention_sub_quad
         elif sampling_attention == "Flash-Attention-v2":
             select_attention_algorithm = rocm_fttn
+            if enable_cudnn:
+                torch.backends.cuda.enable_cudnn_sdp(True)
+                torch.backends.cudnn.benchmark = True
+                torch.backends.cudnn.enabled = True
+            else:
+                torch.backends.cuda.enable_cudnn_sdp(False)
+                torch.backends.cudnn.enabled = False
+                torch.backends.cudnn.benchmark = False
 
         if vae_attention == "xformers":
             select_attention_vae_algorithm = xformers_attention
@@ -368,6 +370,14 @@ class AttnOptSelector:
             select_attention_vae_algorithm = normal_attention
         elif vae_attention == "Flash-Attention-v2":
             select_attention_vae_algorithm = rocm_fttn_vae
+            if enable_cudnn:
+                torch.backends.cuda.enable_cudnn_sdp(True)
+                torch.backends.cudnn.benchmark = True
+                torch.backends.cudnn.enabled = True
+            else:
+                torch.backends.cuda.enable_cudnn_sdp(False)
+                torch.backends.cudnn.enabled = False
+                torch.backends.cudnn.benchmark = False
 
         comfy.ldm.modules.diffusionmodules.model.make_attn = make_attn
         comfy.ldm.modules.diffusionmodules.model.AttnBlock = AttnBlock_hijack
